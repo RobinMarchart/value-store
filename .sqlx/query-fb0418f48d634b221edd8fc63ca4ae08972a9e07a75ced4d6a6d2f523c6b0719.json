@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO change_rels (parent,child) VALUES (?,?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "fb0418f48d634b221edd8fc63ca4ae08972a9e07a75ced4d6a6d2f523c6b0719"
+}

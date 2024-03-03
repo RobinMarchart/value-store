@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT change_rels.parent FROM change_rels JOIN changes ON change_rels.parent == changes.id WHERE change_rels.child == ? ORDER BY changes.hash ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "parent",
+        "ordinal": 0,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "023bc82277667dccb3129f8619f6364554fd28efc359d3736fa9bddf66867697"
+}
