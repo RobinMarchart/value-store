@@ -70,7 +70,7 @@ impl Storage for SqliteStorage {
             sqlx::query_scalar!("SELECT id FROM changes WHERE hash==?", hash)
                 .fetch_optional(&self.inner)
                 .await?
-                .map( ChangeId),
+                .map(ChangeId),
         )
     }
 

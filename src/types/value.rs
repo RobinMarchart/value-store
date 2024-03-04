@@ -205,16 +205,28 @@ impl Value {
         i: I,
     ) -> Result<(), ValueStoreError> {
         for change in i {
-            match change {
-                ChangeContent::Insert { path, value } => self.apply_insert(&path, value,&path)?,
-                ChangeContent::Replace { path, old, new } => self.apply_replace(&path, old, new,&path)?,
-                ChangeContent::Delete { path, old } => self.apply_delete(&path, old,&path)?,
-            }
+            self.apply(change)?;
         }
         Ok(())
     }
 
-    pub fn apply_delete(&mut self, path: &[PathElement], old: Value,full_path:&[PathElement]) -> Result<(), ValueStoreError> {
+    pub fn apply(&mut self, change: ChangeContent) -> Result<(), ValueStoreError> {
+        match change {
+            ChangeContent::Insert { path, value } => self.apply_insert(&path, value, &path)?,
+            ChangeContent::Replace { path, old, new } => {
+                self.apply_replace(&path, old, new, &path)?
+            }
+            ChangeContent::Delete { path, old } => self.apply_delete(&path, old, &path)?,
+        }
+        Ok(())
+    }
+
+    pub fn apply_delete(
+        &mut self,
+        path: &[PathElement],
+        old: Value,
+        full_path: &[PathElement],
+    ) -> Result<(), ValueStoreError> {
         if path.is_empty() {
             *self = Default::default();
             Ok(())
@@ -227,37 +239,55 @@ impl Value {
                             Ok(())
                         } else {
                             Err(ValueStoreError::InvalidChange {
-                                change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                                change: ChangeContent::Delete {
+                                    path: full_path.to_vec(),
+                                    old,
+                                },
                             })
                         }
                     }
                     std::collections::hash_map::Entry::Vacant(_) => {
                         Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                            change: ChangeContent::Delete {
+                                path: full_path.to_vec(),
+                                old,
+                            },
                         })
                     }
                 },
                 (Value::Array(vec), PathElement::Index(index)) => {
                     if *index as usize >= vec.len() {
                         Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                            change: ChangeContent::Delete {
+                                path: full_path.to_vec(),
+                                old,
+                            },
                         })
                     } else if PartialEq::eq(&vec[*index as usize], &old) {
                         vec.remove(*index as usize);
                         Ok(())
                     } else {
                         Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                            change: ChangeContent::Delete {
+                                path: full_path.to_vec(),
+                                old,
+                            },
                         })
                     }
                 }
                 _ => Err(ValueStoreError::InvalidChange {
-                    change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                    change: ChangeContent::Delete {
+                        path: full_path.to_vec(),
+                        old,
+                    },
                 }),
             }
         } else {
             Err(ValueStoreError::InvalidChange {
-                change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                change: ChangeContent::Delete {
+                    path: full_path.to_vec(),
+                    old,
+                },
             })
         }
     }
@@ -267,20 +297,28 @@ impl Value {
         path: &[PathElement],
         old: Value,
         new: Value,
-        full_path:&[PathElement]
+        full_path: &[PathElement],
     ) -> Result<(), ValueStoreError> {
-        if let Some(val) = self.get_mut(&path) {
+        if let Some(val) = self.get_mut(path) {
             if PartialEq::eq(&old, val) {
                 *val = new;
                 Ok(())
             } else {
                 Err(ValueStoreError::InvalidChange {
-                    change: ChangeContent::Replace { path:full_path.to_vec(), old, new },
+                    change: ChangeContent::Replace {
+                        path: full_path.to_vec(),
+                        old,
+                        new,
+                    },
                 })
             }
         } else {
             Err(ValueStoreError::InvalidChange {
-                change: ChangeContent::Replace { path:full_path.to_vec(), old, new },
+                change: ChangeContent::Replace {
+                    path: full_path.to_vec(),
+                    old,
+                    new,
+                },
             })
         }
     }
@@ -289,7 +327,7 @@ impl Value {
         &mut self,
         path: &[PathElement],
         value: Value,
-        full_path:&[PathElement]
+        full_path: &[PathElement],
     ) -> Result<(), ValueStoreError> {
         if path.is_empty() {
             *self = value;
@@ -299,7 +337,10 @@ impl Value {
                 (Value::Map(map), PathElement::Field(name)) => match map.entry(name.clone()) {
                     std::collections::hash_map::Entry::Occupied(_) => {
                         Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Insert { path:full_path.to_vec(), value },
+                            change: ChangeContent::Insert {
+                                path: full_path.to_vec(),
+                                value,
+                            },
                         })
                     }
                     std::collections::hash_map::Entry::Vacant(e) => {
@@ -310,7 +351,10 @@ impl Value {
                 (Value::Array(vec), PathElement::Index(index)) => {
                     if *index as usize > vec.len() {
                         Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Insert { path:full_path.to_vec(), value },
+                            change: ChangeContent::Insert {
+                                path: full_path.to_vec(),
+                                value,
+                            },
                         })
                     } else {
                         vec.insert(*index as usize, value);
@@ -318,12 +362,18 @@ impl Value {
                     }
                 }
                 _ => Err(ValueStoreError::InvalidChange {
-                    change: ChangeContent::Insert { path:full_path.to_vec(), value },
+                    change: ChangeContent::Insert {
+                        path: full_path.to_vec(),
+                        value,
+                    },
                 }),
             }
         } else {
             Err(ValueStoreError::InvalidChange {
-                change: ChangeContent::Insert { path:full_path.to_vec(), value },
+                change: ChangeContent::Insert {
+                    path: full_path.to_vec(),
+                    value,
+                },
             })
         }
     }
