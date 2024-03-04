@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::types::change::{format_hash_lower, Hash};
+use crate::types::change::{format_hash_lower, Hash, ChangeContent};
 
 #[derive(Debug)]
 pub enum Error {
@@ -17,6 +17,7 @@ pub enum Error {
 pub enum ValueStoreError {
     HeadParentMismatch { parent: Hash },
     ParentHashSame,
+    InvalidChange{change: ChangeContent},
 }
 
 impl Display for Error {
@@ -45,6 +46,9 @@ impl Display for ValueStoreError {
             }
             ValueStoreError::ParentHashSame => {
                 f.write_str("Tried to construct Parents with two times the same parent")
+            }
+            ValueStoreError::InvalidChange { change } => {
+                write!(f,"invalid change: {change:x?}")
             }
         }
     }

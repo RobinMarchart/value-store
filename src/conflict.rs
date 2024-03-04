@@ -1,6 +1,9 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::types::{change::ChangeContent, PathElement, Value};
+use crate::{
+    error::ValueStoreError,
+    types::{change::ChangeContent, PathElement, Value},
+};
 pub struct ActiveConflict {
     pub common_value: Value,
     pub conflicts: [ChangeTree; 2],
@@ -46,74 +49,108 @@ pub enum ChangeTree {
 }
 
 impl ChangeTree {
-    pub fn construct<I: IntoIterator<Item = ChangeContent>>(iter: I) -> Option<ChangeTree> {
-        None
+    pub fn construct<I: IntoIterator<Item = ChangeContent>>(iter: I) -> Result<Option<ChangeTree>,ValueStoreError> {
+        let mut res = None;
+        for change in iter{
+            Self::add_change(&mut res, change)?
+        }
+        Ok(res)
     }
-    pub fn add_change(this: &mut Option<ChangeTree>, change: ChangeContent) {
-        if let Some(this) = this {
+
+    fn add_change_insert(
+        &mut self,
+        path: Vec<PathElement>,
+        value: Value,
+        index: usize,
+    ) -> Result<(), ValueStoreError> {
+        if let Some(elem) = path.get(index) {
+            match self {
+                ChangeTree::Replace { old, new, changes } => todo!(),
+                ChangeTree::Remove { old, changes } => Err(ValueStoreError::InvalidChange {
+                    change: ChangeContent::Insert { path, value },
+                }),
+                ChangeTree::Add { new, changes } => todo!(),
+                ChangeTree::Array(map) => {
+                    if let PathElement::Index(i) = elem {
+                        if let Some(new) = map.get_mut(i) {
+                            new.add_change_insert(path, value, index + 1)
+                        } else {
+                            let after = map.split_off(i);
+                            map.insert(*i, Self::from_insert(path, value, index+1));
+                            for (key,value) in after.into_iter(){
+                                map.insert(key+1, value);
+                            }
+                            Ok(())
+                        }
+                    } else {
+                        Err(ValueStoreError::InvalidChange {
+                            change: ChangeContent::Insert { path, value },
+                        })
+                    }
+                }
+                ChangeTree::Map(map) => {
+                    if let PathElement::Field(name) = elem {
+                        if let Some(new) = map.get_mut(name) {
+                            new.add_change_insert(path, value, index + 1)
+                        } else {
+                            map.insert(name.clone(), Self::from_insert(path, value, index+1));
+                            Ok(())
+                        }
+                    } else {
+                        Err(ValueStoreError::InvalidChange {
+                            change: ChangeContent::Insert { path, value },
+                        })
+                    }
+                }
+            }
+        } else {
+            match self {
+                ChangeTree::Remove { old, changes } => todo!(),
+                _ => Err(ValueStoreError::InvalidChange {
+                    change: ChangeContent::Insert { path, value },
+                }),
+            }
+        }
+    }
+
+    fn from_insert(path: Vec<PathElement>, value: Value, index: usize) -> Self {
+        match path.get(index) {
+            Some(PathElement::Field(name)) => {
+                let mut new = HashMap::new();
+                new.insert(name.clone(), Self::from_insert(path, value, index + 1));
+                Self::Map(new)
+            }
+            Some(PathElement::Index(i)) => {
+                let mut new = BTreeMap::new();
+                new.insert(*i, Self::from_insert(path, value, index + 1));
+                Self::Array(new)
+            }
+            None => Self::Add {
+                new: value.clone(),
+                changes: vec![ChangeContent::Insert { path, value }],
+            },
+        }
+    }
+
+    fn add_change(
+        this: &mut Option<ChangeTree>,
+        change: ChangeContent,
+    ) -> Result<(), ValueStoreError> {
+        if let Some(this) = this.as_mut() {
             match change {
-                ChangeContent::Insert { path, value } => {}
+                ChangeContent::Insert { path, value } => {
+                    this.add_change_insert(path, value, 0)?;
+                }
                 ChangeContent::Replace { path, old, new } => todo!(),
                 ChangeContent::Delete { path, old } => todo!(),
             }
         } else {
-            let (mut val, path) = match change {
-                ChangeContent::Insert { path, value } => {
-                    let change = ChangeContent::Insert {
-                        path: path.clone(),
-                        value: value.clone(),
-                    };
-                    (
-                        ChangeTree::Add {
-                            new: value,
-                            changes: vec![change],
-                        },
-                        path,
-                    )
-                }
-                ChangeContent::Replace { path, old, new } => {
-                    let change = ChangeContent::Replace {
-                        path: path.clone(),
-                        old: old.clone(),
-                        new: new.clone(),
-                    };
-                    (
-                        ChangeTree::Replace {
-                            old,
-                            new,
-                            changes: vec![change],
-                        },
-                        path,
-                    )
-                }
-                ChangeContent::Delete { path, old } => {
-                    let change = ChangeContent::Delete {
-                        path: path.clone(),
-                        old: old.clone(),
-                    };
-                    (
-                        ChangeTree::Remove {
-                            old,
-                            changes: vec![change],
-                        },
-                        path,
-                    )
-                }
-            };
-            for path in path.into_iter().rev() {
-                match path {
-                    PathElement::Field(name) => {
-                        let mut new = HashMap::new();
-                        new.insert(name, val);
-                        val = ChangeTree::Map(new);
-                    }
-                    PathElement::Index(index) => {
-                        let mut new = BTreeMap::new();
-                        new.insert(index, val);
-                        val = ChangeTree::Array(new);
-                    }
-                }
-            }
+            *this=Some(match change{
+                ChangeContent::Insert { path, value } => Self::from_insert(path, value, 0),
+                ChangeContent::Replace { path, old, new } => todo!(),
+                ChangeContent::Delete { path, old } => todo!(),
+            })
         }
+        Ok(())
     }
 }
