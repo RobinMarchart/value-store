@@ -49,9 +49,11 @@ pub enum ChangeTree {
 }
 
 impl ChangeTree {
-    pub fn construct<I: IntoIterator<Item = ChangeContent>>(iter: I) -> Result<Option<ChangeTree>,ValueStoreError> {
+    pub fn construct<I: IntoIterator<Item = ChangeContent>>(
+        iter: I,
+    ) -> Result<Option<ChangeTree>, ValueStoreError> {
         let mut res = None;
-        for change in iter{
+        for change in iter {
             Self::add_change(&mut res, change)?
         }
         Ok(res)
@@ -76,9 +78,9 @@ impl ChangeTree {
                             new.add_change_insert(path, value, index + 1)
                         } else {
                             let after = map.split_off(i);
-                            map.insert(*i, Self::from_insert(path, value, index+1));
-                            for (key,value) in after.into_iter(){
-                                map.insert(key+1, value);
+                            map.insert(*i, Self::from_insert(path, value, index + 1));
+                            for (key, value) in after.into_iter() {
+                                map.insert(key + 1, value);
                             }
                             Ok(())
                         }
@@ -93,7 +95,7 @@ impl ChangeTree {
                         if let Some(new) = map.get_mut(name) {
                             new.add_change_insert(path, value, index + 1)
                         } else {
-                            map.insert(name.clone(), Self::from_insert(path, value, index+1));
+                            map.insert(name.clone(), Self::from_insert(path, value, index + 1));
                             Ok(())
                         }
                     } else {
@@ -145,7 +147,7 @@ impl ChangeTree {
                 ChangeContent::Delete { path, old } => todo!(),
             }
         } else {
-            *this=Some(match change{
+            *this = Some(match change {
                 ChangeContent::Insert { path, value } => Self::from_insert(path, value, 0),
                 ChangeContent::Replace { path, old, new } => todo!(),
                 ChangeContent::Delete { path, old } => todo!(),

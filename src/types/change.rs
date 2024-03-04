@@ -1,4 +1,7 @@
-use std::fmt::{self, LowerHex, UpperHex};
+use std::{
+    cmp::Ordering::{Equal, Greater, Less},
+    fmt::{self, LowerHex, UpperHex},
+};
 
 use serde::{
     de::{self, Visitor},
@@ -10,7 +13,7 @@ use crate::error::ValueStoreError;
 
 use super::{PathElement, Value};
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize,Clone)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Clone)]
 pub enum ChangeContent {
     Insert {
         path: Vec<PathElement>,
@@ -55,12 +58,10 @@ impl Parents {
         Ok(Self::One(p))
     }
     pub fn two(p1: Hash, p2: Hash) -> Result<Self, ValueStoreError> {
-        if p1 < p2 {
-            Ok(Self::Two(p1, p2))
-        } else if p2 < p1 {
-            Ok(Self::Two(p2, p1))
-        } else {
-            Err(ValueStoreError::ParentHashSame)
+        match p1.cmp(&p2) {
+            Less => Ok(Self::Two(p1, p2)),
+            Equal => Err(ValueStoreError::ParentHashSame),
+            Greater => Ok(Self::Two(p2, p1)),
         }
     }
 }
@@ -108,7 +109,7 @@ impl<'de> Visitor<'de> for ParentsVisitor {
     {
         if let Some(p1) = seq.next_element()? {
             if let Some(p2) = seq.next_element()? {
-                if let None = seq.next_element::<Hash>()? {
+                if seq.next_element::<Hash>()?.is_none() {
                     if p1 < p2 {
                         Ok(Parents::Two(p1, p2))
                     } else {

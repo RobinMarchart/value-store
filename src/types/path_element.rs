@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(PartialEq, Eq,Clone)]
+#[derive(PartialEq, Eq, Clone)]
 pub enum PathElement {
     Field(String),
     Index(u32),

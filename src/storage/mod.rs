@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use crate::{types::change::Hash, Result};
+use crate::{async_support::MaybeSend, types::change::Hash, Result};
 
 pub trait Storage {
     type ChangeId;
@@ -11,19 +11,19 @@ pub trait Storage {
         hash: &Hash,
         content: &[u8],
         parents: &[Hash],
-    ) -> impl Future<Output = Result<Self::ChangeId>> + Send;
+    ) -> impl Future<Output = Result<Self::ChangeId>> + MaybeSend;
     fn get_change_id(
         &self,
         hash: Hash,
-    ) -> impl Future<Output = Result<Option<Self::ChangeId>>> + Send;
+    ) -> impl Future<Output = Result<Option<Self::ChangeId>>> + MaybeSend;
     fn get_change_rels(
         &self,
         id: Self::ChangeId,
-    ) -> impl Future<Output = Result<Vec<Self::ChangeId>>> + Send;
+    ) -> impl Future<Output = Result<Vec<Self::ChangeId>>> + MaybeSend;
     fn get_change_content(
         &self,
         id: Self::ChangeId,
-    ) -> impl Future<Output = Result<Vec<u8>>> + Send;
+    ) -> impl Future<Output = Result<Vec<u8>>> + MaybeSend;
 }
 
 #[cfg(feature = "db_sqlite")]
