@@ -200,82 +200,96 @@ impl Value {
             Some(self)
         }
     }
-    pub fn apply<I: IntoIterator<Item = ChangeContent>>(
+    pub fn apply_iter<I: IntoIterator<Item = ChangeContent>>(
         &mut self,
         i: I,
     ) -> Result<(), ValueStoreError> {
         for change in i {
             match change {
-                ChangeContent::Insert { path, value } => self.apply_insert(path, value)?,
-                ChangeContent::Replace { path, old, new } => {
-                    if let Some(val) = self.get_mut(&path) {
-                        if PartialEq::eq(&old, val) {
-                            *val = new;
-                        } else {
-                            return Err(ValueStoreError::InvalidChange {
-                                change: ChangeContent::Replace { path, old, new },
-                            });
-                        }
-                    }
-                }
-                ChangeContent::Delete { path, old } => {
-                    if path.is_empty() {
-                        *self = Default::default();
-                    }
-                    if let Some(parent) = self.get_mut(&path[..path.len() - 1]) {
-                        match (parent, &path[path.len() - 1]) {
-                            (Value::Map(map), PathElement::Field(name)) => {
-                                match map.entry(name.clone()) {
-                                    std::collections::hash_map::Entry::Occupied(e) => {
-                                        if PartialEq::eq(&old, e.get()) {
-                                            e.remove();
-                                        } else {
-                                            return Err(ValueStoreError::InvalidChange {
-                                                change: ChangeContent::Delete { path, old },
-                                            });
-                                        }
-                                    }
-                                    std::collections::hash_map::Entry::Vacant(_) => {
-                                        return Err(ValueStoreError::InvalidChange {
-                                            change: ChangeContent::Delete { path, old },
-                                        });
-                                    }
-                                };
-                            }
-                            (Value::Array(vec), PathElement::Index(index)) => {
-                                if *index as usize >= vec.len() {
-                                    return Err(ValueStoreError::InvalidChange {
-                                        change: ChangeContent::Delete { path, old },
-                                    });
-                                } else if PartialEq::eq(&vec[*index as usize], &old) {
-                                    vec.remove(*index as usize);
-                                } else {
-                                    return Err(ValueStoreError::InvalidChange {
-                                        change: ChangeContent::Delete { path, old },
-                                    });
-                                }
-                            }
-                            _ => {
-                                return Err(ValueStoreError::InvalidChange {
-                                    change: ChangeContent::Delete { path, old },
-                                })
-                            }
-                        }
-                    } else {
-                        return Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Delete { path, old },
-                        });
-                    }
-                }
+                ChangeContent::Insert { path, value } => self.apply_insert(&path, value,&path)?,
+                ChangeContent::Replace { path, old, new } => self.apply_replace(&path, old, new,&path)?,
+                ChangeContent::Delete { path, old } => self.apply_delete(&path, old,&path)?,
             }
         }
         Ok(())
     }
 
+    pub fn apply_delete(&mut self, path: &[PathElement], old: Value,full_path:&[PathElement]) -> Result<(), ValueStoreError> {
+        if path.is_empty() {
+            *self = Default::default();
+            Ok(())
+        } else if let Some(parent) = self.get_mut(&path[..path.len() - 1]) {
+            match (parent, &path[path.len() - 1]) {
+                (Value::Map(map), PathElement::Field(name)) => match map.entry(name.clone()) {
+                    std::collections::hash_map::Entry::Occupied(e) => {
+                        if PartialEq::eq(&old, e.get()) {
+                            e.remove();
+                            Ok(())
+                        } else {
+                            Err(ValueStoreError::InvalidChange {
+                                change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                            })
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(_) => {
+                        Err(ValueStoreError::InvalidChange {
+                            change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                        })
+                    }
+                },
+                (Value::Array(vec), PathElement::Index(index)) => {
+                    if *index as usize >= vec.len() {
+                        Err(ValueStoreError::InvalidChange {
+                            change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                        })
+                    } else if PartialEq::eq(&vec[*index as usize], &old) {
+                        vec.remove(*index as usize);
+                        Ok(())
+                    } else {
+                        Err(ValueStoreError::InvalidChange {
+                            change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                        })
+                    }
+                }
+                _ => Err(ValueStoreError::InvalidChange {
+                    change: ChangeContent::Delete { path:full_path.to_vec(), old },
+                }),
+            }
+        } else {
+            Err(ValueStoreError::InvalidChange {
+                change: ChangeContent::Delete { path:full_path.to_vec(), old },
+            })
+        }
+    }
+
+    pub fn apply_replace(
+        &mut self,
+        path: &[PathElement],
+        old: Value,
+        new: Value,
+        full_path:&[PathElement]
+    ) -> Result<(), ValueStoreError> {
+        if let Some(val) = self.get_mut(&path) {
+            if PartialEq::eq(&old, val) {
+                *val = new;
+                Ok(())
+            } else {
+                Err(ValueStoreError::InvalidChange {
+                    change: ChangeContent::Replace { path:full_path.to_vec(), old, new },
+                })
+            }
+        } else {
+            Err(ValueStoreError::InvalidChange {
+                change: ChangeContent::Replace { path:full_path.to_vec(), old, new },
+            })
+        }
+    }
+
     pub fn apply_insert(
         &mut self,
-        path: Vec<PathElement>,
+        path: &[PathElement],
         value: Value,
+        full_path:&[PathElement]
     ) -> Result<(), ValueStoreError> {
         if path.is_empty() {
             *self = value;
@@ -285,7 +299,7 @@ impl Value {
                 (Value::Map(map), PathElement::Field(name)) => match map.entry(name.clone()) {
                     std::collections::hash_map::Entry::Occupied(_) => {
                         Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Insert { path, value },
+                            change: ChangeContent::Insert { path:full_path.to_vec(), value },
                         })
                     }
                     std::collections::hash_map::Entry::Vacant(e) => {
@@ -296,7 +310,7 @@ impl Value {
                 (Value::Array(vec), PathElement::Index(index)) => {
                     if *index as usize > vec.len() {
                         Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Insert { path, value },
+                            change: ChangeContent::Insert { path:full_path.to_vec(), value },
                         })
                     } else {
                         vec.insert(*index as usize, value);
@@ -304,12 +318,12 @@ impl Value {
                     }
                 }
                 _ => Err(ValueStoreError::InvalidChange {
-                    change: ChangeContent::Insert { path, value },
+                    change: ChangeContent::Insert { path:full_path.to_vec(), value },
                 }),
             }
         } else {
             Err(ValueStoreError::InvalidChange {
-                change: ChangeContent::Insert { path, value },
+                change: ChangeContent::Insert { path:full_path.to_vec(), value },
             })
         }
     }
