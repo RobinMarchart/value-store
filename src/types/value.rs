@@ -1,6 +1,9 @@
 use std::{collections::HashMap, fmt::Debug};
 
-use serde::{de::Visitor, Deserialize, Serialize};
+use serde::{
+    de::{self, Visitor},
+    ser, Deserialize, Serialize,
+};
 
 use crate::{conflict::ChangeTree, error::ValueStoreError, util::stack_list::StackList};
 
@@ -12,7 +15,7 @@ pub enum Value {
     Float(f64),
     Bool(bool),
     String(String),
-    Blob(Vec<u8>),
+    Blob { mime: String, data: Vec<u8> },
     Array(Vec<Value>),
     Map(HashMap<String, Value>),
 }
@@ -24,9 +27,9 @@ impl Debug for Value {
             Value::Float(v) => Debug::fmt(v, f),
             Value::Bool(v) => Debug::fmt(v, f),
             Value::String(v) => Debug::fmt(v, f),
-            Value::Array(v) => Debug::fmt(v, f),
+            Value::Array(v) => Debug::fmt(v.as_slice(), f),
             Value::Map(v) => Debug::fmt(v, f),
-            Value::Blob(v) => Debug::fmt(v.as_slice(), f),
+            Value::Blob { mime, data: _ } => write!(f, "Blob of type {mime}"),
         }
     }
 }
@@ -37,13 +40,25 @@ impl Serialize for Value {
         S: serde::Serializer,
     {
         match self {
-            Value::Integer(v) => Serialize::serialize(v, serializer),
-            Value::Float(v) => Serialize::serialize(v, serializer),
-            Value::Bool(v) => Serialize::serialize(v, serializer),
-            Value::String(v) => Serialize::serialize(v, serializer),
+            Value::Integer(v) => serializer.serialize_i64(*v),
+            Value::Float(v) => serializer.serialize_f64(*v),
+            Value::Bool(v) => serializer.serialize_bool(*v),
+            Value::String(v) => serializer.serialize_str(&v),
             Value::Array(v) => Serialize::serialize(v, serializer),
             Value::Map(v) => Serialize::serialize(v, serializer),
-            Value::Blob(v) => serializer.serialize_bytes(v),
+            Value::Blob { mime, data } => {
+                if mime.len() > u8::MAX as usize {
+                    Err(<S::Error as ser::Error>::custom(
+                        "mime type should have a max len of 255",
+                    ))
+                } else {
+                    let mut buf = Vec::with_capacity(1 + mime.len() + data.len());
+                    buf.push(mime.len() as u8);
+                    buf.extend_from_slice(mime.as_bytes());
+                    buf.extend_from_slice(&data);
+                    serializer.serialize_bytes(&buf)
+                }
+            }
         }
     }
 }
@@ -134,13 +149,52 @@ impl<'de> Visitor<'de> for ValueVisitor {
     where
         E: serde::de::Error,
     {
-        Ok(Value::Blob(v.to_vec()))
+        let str_len = *v
+            .get(0)
+            .ok_or_else(|| <E as de::Error>::invalid_length(0, &"at least 1"))?
+            as usize;
+        let mime = std::str::from_utf8(v.get(1..str_len + 1).ok_or_else(|| {
+            <E as de::Error>::invalid_length(
+                v.len(),
+                &"the mime type with the length indicated in the first byte",
+            )
+        })?)
+        .map_err(|_| {
+            <E as de::Error>::invalid_value(
+                de::Unexpected::Other("non utf-8 value"),
+                &"mime type in utf-8 encoding",
+            )
+        })?
+        .to_string();
+        Ok(Value::Blob {
+            mime,
+            data: v[str_len + 1..].to_vec(),
+        })
     }
-    fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+    fn visit_byte_buf<E>(self, mut v: Vec<u8>) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
-        Ok(Value::Blob(v))
+        let str_len = *v
+            .get(0)
+            .ok_or_else(|| <E as de::Error>::invalid_length(0, &"at least 1"))?
+            as usize;
+        let mime = std::str::from_utf8(v.get(1..str_len + 1).ok_or_else(|| {
+            <E as de::Error>::invalid_length(
+                v.len(),
+                &"the mime type with the length indicated in the first byte",
+            )
+        })?)
+        .map_err(|_| {
+            <E as de::Error>::invalid_value(
+                de::Unexpected::Other("non utf-8 value"),
+                &"mime type in utf-8 encoding",
+            )
+        })?
+        .to_string();
+        v.copy_within(str_len + 1.., 0);
+        v.truncate(v.len() - str_len - 1);
+        Ok(Value::Blob { mime, data: v })
     }
 }
 
@@ -464,9 +518,18 @@ impl PartialEq for Value {
             }
             (Value::Bool(v1), Value::Bool(v2)) => v1 == v2,
             (Value::String(v1), Value::String(v2)) => v1 == v2,
-            (Value::Blob(v1), Value::Blob(v2)) => v1 == v2,
             (Value::Array(v1), Value::Array(v2)) => v1 == v2,
             (Value::Map(v1), Value::Map(v2)) => v1 == v2,
+            (
+                Value::Blob {
+                    mime: mime1,
+                    data: data1,
+                },
+                Value::Blob {
+                    mime: mime2,
+                    data: data2,
+                },
+            ) => mime1 == mime2 && data1 == data2,
             _ => false,
         }
     }
