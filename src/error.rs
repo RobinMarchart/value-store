@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::types::change::{format_hash_lower, ChangeContent, Hash};
+use crate::{types::{change::{format_hash_lower, ChangeContent, Hash}, PathElement}, conflict::ChangeTree};
 
 #[derive(Debug)]
 pub enum Error {
@@ -18,6 +18,7 @@ pub enum ValueStoreError {
     HeadParentMismatch { parent: Hash },
     ParentHashSame,
     InvalidChange { change: ChangeContent },
+    InvalidTreeChange {change:ChangeTree,path:Vec<PathElement>}
 }
 
 impl Display for Error {
@@ -49,6 +50,9 @@ impl Display for ValueStoreError {
             }
             ValueStoreError::InvalidChange { change } => {
                 write!(f, "invalid change: {change:x?}")
+            }
+            ValueStoreError::InvalidTreeChange { change, path } => {
+                write!(f,"invalid change at {:?}: {change:x?}",path.as_slice())
             }
         }
     }

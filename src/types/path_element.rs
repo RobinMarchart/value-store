@@ -8,6 +8,29 @@ pub enum PathElement {
     Index(u32),
 }
 
+pub enum PathElementRef<'s>{
+    Field(&'s str),
+    Index(u32)
+}
+
+impl PathElement{
+    pub fn as_ref(&self)->PathElementRef<'_>{
+        match self{
+            PathElement::Field(name) => PathElementRef::Field(name),
+            PathElement::Index(index) => PathElementRef::Index(*index),
+        }
+    }
+}
+
+impl<'a> PathElementRef<'a> {
+    pub fn to_owned(&self)->PathElement{
+        match self{
+            PathElementRef::Field(name) => PathElement::Field((*name).to_owned()),
+            PathElementRef::Index(index) => PathElement::Index(*index),
+        }
+    }
+}
+
 struct PathElementVisitor {}
 
 impl serde::de::Visitor<'_> for PathElementVisitor {

@@ -138,3 +138,13 @@ impl<'de> Deserialize<'de> for Parents {
         deserializer.deserialize_seq(ParentsVisitor {})
     }
 }
+
+impl ChangeContent {
+    pub fn revert(self)->Self{
+        match self{
+            ChangeContent::Insert { path, value } => ChangeContent::Delete { path , old: value },
+            ChangeContent::Replace { path, old, new } => ChangeContent::Replace { path , old: new, new: old },
+            ChangeContent::Delete { path, old } => ChangeContent::Insert { path , value: old },
+        }
+    }
+}

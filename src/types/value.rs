@@ -2,9 +2,9 @@ use std::{collections::HashMap, fmt::Debug};
 
 use serde::{de::Visitor, Deserialize, Serialize};
 
-use crate::error::ValueStoreError;
+use crate::{conflict::ChangeTree, error::ValueStoreError, util::stack_list::StackList};
 
-use super::{change::ChangeContent, PathElement};
+use super::{change::ChangeContent, path_element::PathElementRef, PathElement};
 
 #[derive(Clone)]
 pub enum Value {
@@ -228,8 +228,12 @@ impl Value {
         full_path: &[PathElement],
     ) -> Result<(), ValueStoreError> {
         if path.is_empty() {
-            *self = Default::default();
-            Ok(())
+            Err(ValueStoreError::InvalidChange {
+                change: ChangeContent::Delete {
+                    path: full_path.to_vec(),
+                    old,
+                },
+            })
         } else if let Some(parent) = self.get_mut(&path[..path.len() - 1]) {
             match (parent, &path[path.len() - 1]) {
                 (Value::Map(map), PathElement::Field(name)) => match map.entry(name.clone()) {
@@ -330,8 +334,12 @@ impl Value {
         full_path: &[PathElement],
     ) -> Result<(), ValueStoreError> {
         if path.is_empty() {
-            *self = value;
-            Ok(())
+            Err(ValueStoreError::InvalidChange {
+                change: ChangeContent::Insert {
+                    path: full_path.to_vec(),
+                    value,
+                },
+            })
         } else if let Some(parent) = self.get_mut(&path[..path.len() - 1]) {
             match (parent, &path[path.len() - 1]) {
                 (Value::Map(map), PathElement::Field(name)) => match map.entry(name.clone()) {
@@ -375,6 +383,64 @@ impl Value {
                     value,
                 },
             })
+        }
+    }
+
+    /**
+     *  applies change tree to value
+     *  path is the path of the current change tree
+     *  */
+    fn apply_tree_inner(
+        &mut self,
+        changes: ChangeTree,
+        path: StackList<'_, PathElementRef<'_>>,
+    ) -> Result<(), ValueStoreError> {
+        match changes {
+            ChangeTree::Replace { old, new, changes } => {
+                if PartialEq::eq(&old, self) {
+                    *self = new;
+                    Ok(())
+                } else {
+                    Err(ValueStoreError::InvalidTreeChange {
+                        change: ChangeTree::Replace { old, new, changes },
+                        path: path.to_vec_mapped(PathElementRef::to_owned),
+                    })
+                }
+            }
+            ChangeTree::Remove { old, changes } => {
+                if path.is_empty() {
+                    Err(ValueStoreError::InvalidTreeChange {
+                        change: ChangeTree::Remove { old, changes },
+                        path: Vec::with_capacity(0),
+                    })
+                } else {
+                    unreachable!()
+                }
+            }
+            ChangeTree::Add { new, changes } => {
+                if path.is_empty() {
+                    Err(ValueStoreError::InvalidTreeChange {
+                        change: ChangeTree::Add { new, changes },
+                        path: Vec::with_capacity(0),
+                    })
+                } else {
+                    unreachable!()
+                }
+            }
+            ChangeTree::Array(map) => {
+                if let Value::Array(array) = self {
+                    for (index, child) in map.iter() {
+                        if let Some(val) = array.get_mut(*index as usize) {}
+                    }
+                    Ok(())
+                } else {
+                    Err(ValueStoreError::InvalidTreeChange {
+                        change: ChangeTree::Array(map),
+                        path: path.to_vec_mapped(PathElementRef::to_owned),
+                    })
+                }
+            }
+            ChangeTree::Map(_) => todo!(),
         }
     }
 }
