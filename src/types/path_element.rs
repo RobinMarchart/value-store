@@ -110,20 +110,41 @@ impl Debug for PathElement {
 
 #[cfg(test)]
 mod test {
-    use serde_test::{assert_tokens, Token};
+    use serde_test::{assert_tokens, Token, assert_de_tokens};
+    use ciborium::{into_writer,from_reader};
 
     use super::PathElement;
 
     #[test]
-    fn test_index_ser_de() {
-        assert_tokens(&PathElement::Index(1337), &[Token::U64(1337)]);
+    fn index_ser_de() {
+        assert_tokens(&PathElement::Index(1337), &[Token::U32(1337)]);
+        assert_tokens(&PathElement::Index(0), &[Token::U32(0)]);
+        assert_de_tokens(&PathElement::Index(1337), &[Token::U64(1337)]);
+        assert_de_tokens(&PathElement::Index(1337), &[Token::U16(1337)]);
+        assert_de_tokens(&PathElement::Index(13), &[Token::U8(13)]);
+        assert_de_tokens(&PathElement::Index(3), &[Token::I64(3)]);
+        assert_de_tokens(&PathElement::Index(3), &[Token::I32(3)]);
+        assert_de_tokens(&PathElement::Index(3), &[Token::I16(3)]);
+        assert_de_tokens(&PathElement::Index(3), &[Token::I8(3)]);
     }
 
     #[test]
-    fn test_field_ser_de() {
+    fn field_ser_de() {
         assert_tokens(
             &PathElement::Field("name".to_string()),
             &[Token::Str("name")],
         );
+        assert_de_tokens(&PathElement::Field("name".to_string()), &[Token::String("name")]);
+        assert_de_tokens(&PathElement::Field("name".to_string()), &[Token::BorrowedStr("name")]);
     }
+
+    #[test]
+    fn cbor_round_trip(){
+        let val = [PathElement::Field("test".to_string()),PathElement::Index(1337),PathElement::Field("value".to_string()),PathElement::Index(0)];
+        let mut serialized=Vec::new();
+        into_writer(&val, &mut serialized).expect("serializing failed");
+        let res:Vec<PathElement>=from_reader(serialized.as_slice()).expect("de-serializing failed");
+        assert_eq!(val.as_slice(),res.as_slice(),"value differs after round trip")
+    }
+
 }
