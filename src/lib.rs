@@ -7,5 +7,6 @@ pub mod storage;
 pub mod types;
 pub mod value_store;
 pub mod util;
+pub mod apply;
 
 pub use error::{Error, Result};

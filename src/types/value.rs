@@ -1,23 +1,28 @@
-use std::{collections::HashMap, fmt::Debug};
+use std::{collections::HashMap, fmt::Debug, sync::Arc};
 
 use serde::{
     de::{self, Visitor},
     ser, Deserialize, Serialize,
 };
 
-use crate::{conflict::ChangeTree, error::ValueStoreError, util::stack_list::StackList};
+use crate::{apply::ApplyChange, error::ValueStoreError};
 
-use super::{change::ChangeContent, path_element::PathElementRef, PathElement};
+use super::PathElement;
+
+pub struct Blob {
+    pub mime: String,
+    pub data: Vec<u8>,
+}
 
 #[derive(Clone)]
 pub enum Value {
     Integer(i64),
     Float(f64),
     Bool(bool),
-    String(String),
-    Blob { mime: String, data: Vec<u8> },
-    Array(Vec<Value>),
-    Map(HashMap<String, Value>),
+    String(Arc<String>),
+    Blob(Arc<Blob>),
+    Array(Arc<Vec<Value>>),
+    Map(Arc<HashMap<String, Value>>),
 }
 
 impl Debug for Value {
@@ -29,7 +34,7 @@ impl Debug for Value {
             Value::String(v) => Debug::fmt(v, f),
             Value::Array(v) => Debug::fmt(v.as_slice(), f),
             Value::Map(v) => Debug::fmt(v, f),
-            Value::Blob { mime, data: _ } => write!(f, "Blob of type {mime}"),
+            Value::Blob(blob) => write!(f, "Blob of type {}", blob.mime),
         }
     }
 }
@@ -43,19 +48,19 @@ impl Serialize for Value {
             Value::Integer(v) => serializer.serialize_i64(*v),
             Value::Float(v) => serializer.serialize_f64(*v),
             Value::Bool(v) => serializer.serialize_bool(*v),
-            Value::String(v) => serializer.serialize_str(&v),
+            Value::String(v) => serializer.serialize_str(v),
             Value::Array(v) => Serialize::serialize(v, serializer),
             Value::Map(v) => Serialize::serialize(v, serializer),
-            Value::Blob { mime, data } => {
-                if mime.len() > u8::MAX as usize {
+            Value::Blob(blob) => {
+                if blob.mime.len() > u8::MAX as usize {
                     Err(<S::Error as ser::Error>::custom(
                         "mime type should have a max len of 255",
                     ))
                 } else {
-                    let mut buf = Vec::with_capacity(1 + mime.len() + data.len());
-                    buf.push(mime.len() as u8);
-                    buf.extend_from_slice(mime.as_bytes());
-                    buf.extend_from_slice(&data);
+                    let mut buf = Vec::with_capacity(1 + blob.mime.len() + blob.data.len());
+                    buf.push(blob.mime.len() as u8);
+                    buf.extend_from_slice(blob.mime.as_bytes());
+                    buf.extend_from_slice(&blob.data);
                     serializer.serialize_bytes(&buf)
                 }
             }
@@ -106,14 +111,14 @@ impl<'de> Visitor<'de> for ValueVisitor {
     where
         E: serde::de::Error,
     {
-        Ok(Value::String(v.to_string()))
+        Ok(Value::String(v.to_string().into()))
     }
 
     fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
-        Ok(Value::String(v))
+        Ok(Value::String(v.into()))
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
@@ -128,7 +133,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
         while let Some(v) = seq.next_element()? {
             res.push(v)
         }
-        Ok(Value::Array(res))
+        Ok(Value::Array(res.into()))
     }
 
     fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -143,14 +148,14 @@ impl<'de> Visitor<'de> for ValueVisitor {
         while let Some((key, value)) = map.next_entry()? {
             res.insert(key, value);
         }
-        Ok(Value::Map(res))
+        Ok(Value::Map(res.into()))
     }
     fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
         let str_len = *v
-            .get(0)
+            .first()
             .ok_or_else(|| <E as de::Error>::invalid_length(0, &"at least 1"))?
             as usize;
         let mime = std::str::from_utf8(v.get(1..str_len + 1).ok_or_else(|| {
@@ -166,17 +171,20 @@ impl<'de> Visitor<'de> for ValueVisitor {
             )
         })?
         .to_string();
-        Ok(Value::Blob {
-            mime,
-            data: v[str_len + 1..].to_vec(),
-        })
+        Ok(Value::Blob(
+            Blob {
+                mime,
+                data: v[str_len + 1..].to_vec(),
+            }
+            .into(),
+        ))
     }
     fn visit_byte_buf<E>(self, mut v: Vec<u8>) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
         let str_len = *v
-            .get(0)
+            .first()
             .ok_or_else(|| <E as de::Error>::invalid_length(0, &"at least 1"))?
             as usize;
         let mime = std::str::from_utf8(v.get(1..str_len + 1).ok_or_else(|| {
@@ -194,7 +202,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
         .to_string();
         v.copy_within(str_len + 1.., 0);
         v.truncate(v.len() - str_len - 1);
-        Ok(Value::Blob { mime, data: v })
+        Ok(Value::Blob (Blob{ mime, data: v }.into()))
     }
 }
 
@@ -235,14 +243,14 @@ impl Value {
         if let Some((this, next)) = path.split_first() {
             match (this, self) {
                 (PathElement::Field(name), Value::Map(map)) => {
-                    if let Some(entry) = map.get_mut(name) {
+                    if let Some(entry) = Arc::make_mut(map).get_mut(name) {
                         entry.get_mut(next)
                     } else {
                         None
                     }
                 }
                 (PathElement::Index(index), Value::Array(arr)) => {
-                    if let Some(entry) = arr.get_mut(*index as usize) {
+                    if let Some(entry) = Arc::make_mut(arr).get_mut(*index as usize) {
                         entry.get_mut(next)
                     } else {
                         None
@@ -254,8 +262,8 @@ impl Value {
             Some(self)
         }
     }
-    pub fn apply_iter<I: IntoIterator<Item = ChangeContent>>(
-        &mut self,
+    pub fn apply_iter<'l,I: IntoIterator<Item = &'l C>, C: ApplyChange+'l>(
+        &'l mut self,
         i: I,
     ) -> Result<(), ValueStoreError> {
         for change in i {
@@ -264,244 +272,13 @@ impl Value {
         Ok(())
     }
 
-    pub fn apply(&mut self, change: ChangeContent) -> Result<(), ValueStoreError> {
-        match change {
-            ChangeContent::Insert { path, value } => self.apply_insert(&path, value, &path)?,
-            ChangeContent::Replace { path, old, new } => {
-                self.apply_replace(&path, old, new, &path)?
-            }
-            ChangeContent::Delete { path, old } => self.apply_delete(&path, old, &path)?,
-        }
-        Ok(())
-    }
-
-    pub fn apply_delete(
-        &mut self,
-        path: &[PathElement],
-        old: Value,
-        full_path: &[PathElement],
-    ) -> Result<(), ValueStoreError> {
-        if path.is_empty() {
-            Err(ValueStoreError::InvalidChange {
-                change: ChangeContent::Delete {
-                    path: full_path.to_vec(),
-                    old,
-                },
-            })
-        } else if let Some(parent) = self.get_mut(&path[..path.len() - 1]) {
-            match (parent, &path[path.len() - 1]) {
-                (Value::Map(map), PathElement::Field(name)) => match map.entry(name.clone()) {
-                    std::collections::hash_map::Entry::Occupied(e) => {
-                        if PartialEq::eq(&old, e.get()) {
-                            e.remove();
-                            Ok(())
-                        } else {
-                            Err(ValueStoreError::InvalidChange {
-                                change: ChangeContent::Delete {
-                                    path: full_path.to_vec(),
-                                    old,
-                                },
-                            })
-                        }
-                    }
-                    std::collections::hash_map::Entry::Vacant(_) => {
-                        Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Delete {
-                                path: full_path.to_vec(),
-                                old,
-                            },
-                        })
-                    }
-                },
-                (Value::Array(vec), PathElement::Index(index)) => {
-                    if *index as usize >= vec.len() {
-                        Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Delete {
-                                path: full_path.to_vec(),
-                                old,
-                            },
-                        })
-                    } else if PartialEq::eq(&vec[*index as usize], &old) {
-                        vec.remove(*index as usize);
-                        Ok(())
-                    } else {
-                        Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Delete {
-                                path: full_path.to_vec(),
-                                old,
-                            },
-                        })
-                    }
-                }
-                _ => Err(ValueStoreError::InvalidChange {
-                    change: ChangeContent::Delete {
-                        path: full_path.to_vec(),
-                        old,
-                    },
-                }),
-            }
-        } else {
-            Err(ValueStoreError::InvalidChange {
-                change: ChangeContent::Delete {
-                    path: full_path.to_vec(),
-                    old,
-                },
-            })
-        }
-    }
-
-    pub fn apply_replace(
-        &mut self,
-        path: &[PathElement],
-        old: Value,
-        new: Value,
-        full_path: &[PathElement],
-    ) -> Result<(), ValueStoreError> {
-        if let Some(val) = self.get_mut(path) {
-            if PartialEq::eq(&old, val) {
-                *val = new;
-                Ok(())
-            } else {
-                Err(ValueStoreError::InvalidChange {
-                    change: ChangeContent::Replace {
-                        path: full_path.to_vec(),
-                        old,
-                        new,
-                    },
-                })
-            }
-        } else {
-            Err(ValueStoreError::InvalidChange {
-                change: ChangeContent::Replace {
-                    path: full_path.to_vec(),
-                    old,
-                    new,
-                },
-            })
-        }
-    }
-
-    pub fn apply_insert(
-        &mut self,
-        path: &[PathElement],
-        value: Value,
-        full_path: &[PathElement],
-    ) -> Result<(), ValueStoreError> {
-        if path.is_empty() {
-            Err(ValueStoreError::InvalidChange {
-                change: ChangeContent::Insert {
-                    path: full_path.to_vec(),
-                    value,
-                },
-            })
-        } else if let Some(parent) = self.get_mut(&path[..path.len() - 1]) {
-            match (parent, &path[path.len() - 1]) {
-                (Value::Map(map), PathElement::Field(name)) => match map.entry(name.clone()) {
-                    std::collections::hash_map::Entry::Occupied(_) => {
-                        Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Insert {
-                                path: full_path.to_vec(),
-                                value,
-                            },
-                        })
-                    }
-                    std::collections::hash_map::Entry::Vacant(e) => {
-                        e.insert(value);
-                        Ok(())
-                    }
-                },
-                (Value::Array(vec), PathElement::Index(index)) => {
-                    if *index as usize > vec.len() {
-                        Err(ValueStoreError::InvalidChange {
-                            change: ChangeContent::Insert {
-                                path: full_path.to_vec(),
-                                value,
-                            },
-                        })
-                    } else {
-                        vec.insert(*index as usize, value);
-                        Ok(())
-                    }
-                }
-                _ => Err(ValueStoreError::InvalidChange {
-                    change: ChangeContent::Insert {
-                        path: full_path.to_vec(),
-                        value,
-                    },
-                }),
-            }
-        } else {
-            Err(ValueStoreError::InvalidChange {
-                change: ChangeContent::Insert {
-                    path: full_path.to_vec(),
-                    value,
-                },
-            })
-        }
-    }
-
-    /**
-     *  applies change tree to value
-     *  path is the path of the current change tree
-     *  */
-    fn apply_tree_inner(
-        &mut self,
-        changes: ChangeTree,
-        path: StackList<'_, PathElementRef<'_>>,
-    ) -> Result<(), ValueStoreError> {
-        match changes {
-            ChangeTree::Replace { old, new, changes } => {
-                if PartialEq::eq(&old, self) {
-                    *self = new;
-                    Ok(())
-                } else {
-                    Err(ValueStoreError::InvalidTreeChange {
-                        change: ChangeTree::Replace { old, new, changes },
-                        path: path.to_vec_mapped(PathElementRef::to_owned),
-                    })
-                }
-            }
-            ChangeTree::Remove { old, changes } => {
-                if path.is_empty() {
-                    Err(ValueStoreError::InvalidTreeChange {
-                        change: ChangeTree::Remove { old, changes },
-                        path: Vec::with_capacity(0),
-                    })
-                } else {
-                    unreachable!()
-                }
-            }
-            ChangeTree::Add { new, changes } => {
-                if path.is_empty() {
-                    Err(ValueStoreError::InvalidTreeChange {
-                        change: ChangeTree::Add { new, changes },
-                        path: Vec::with_capacity(0),
-                    })
-                } else {
-                    unreachable!()
-                }
-            }
-            ChangeTree::Array(map) => {
-                if let Value::Array(array) = self {
-                    for (index, child) in map.iter() {
-                        if let Some(val) = array.get_mut(*index as usize) {}
-                    }
-                    Ok(())
-                } else {
-                    Err(ValueStoreError::InvalidTreeChange {
-                        change: ChangeTree::Array(map),
-                        path: path.to_vec_mapped(PathElementRef::to_owned),
-                    })
-                }
-            }
-            ChangeTree::Map(_) => todo!(),
-        }
+    pub fn apply<C: ApplyChange>(&mut self, change: &C) -> Result<(), ValueStoreError> {
+        change.apply(self)
     }
 }
-
 impl Default for Value {
     fn default() -> Self {
-        Value::Map(HashMap::new())
+        Value::Map(HashMap::new().into())
     }
 }
 
@@ -521,15 +298,8 @@ impl PartialEq for Value {
             (Value::Array(v1), Value::Array(v2)) => v1 == v2,
             (Value::Map(v1), Value::Map(v2)) => v1 == v2,
             (
-                Value::Blob {
-                    mime: mime1,
-                    data: data1,
-                },
-                Value::Blob {
-                    mime: mime2,
-                    data: data2,
-                },
-            ) => mime1 == mime2 && data1 == data2,
+                Value::Blob(v1),Value::Blob(v2)
+            ) => v1.mime == v2.mime && v1.data == v2.data,
             _ => false,
         }
     }

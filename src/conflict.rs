@@ -1,11 +1,12 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    mem, fmt::Debug,
+    fmt::Debug,
+    mem,
 };
 
 use crate::{
     error::ValueStoreError,
-    types::{change::ChangeContent, PathElement, Value},
+    types::{change::ChangeContent, PathElement, Value}, apply::simple::{apply_insert, apply_replace},
 };
 pub struct ActiveConflict {
     pub common_value: Value,
@@ -52,12 +53,12 @@ pub enum ChangeTree {
     Map(HashMap<String, ChangeTree>),
 }
 
-pub fn increase_offset(offsets:&mut BTreeMap<u32,u32>,index:u32){
-    if let Some((point,val))= offsets.range(..=index).next_back(){
-        let add = index-point;
-        offsets.insert(index, val+add+1);
-    }else{
-        offsets.insert(index, index+1);
+pub fn increase_offset(offsets: &mut BTreeMap<u32, u32>, index: u32) {
+    if let Some((point, val)) = offsets.range(..=index).next_back() {
+        let add = index - point;
+        offsets.insert(index, val + add + 1);
+    } else {
+        offsets.insert(index, index + 1);
     }
 }
 
@@ -81,7 +82,7 @@ impl ChangeTree {
         if let Some(elem) = path.get(index) {
             match self {
                 ChangeTree::Replace { old, new, changes } => {
-                    new.apply_insert(&path[index + 1..], value.clone(), &path)?;
+                    apply_insert(new, &path[index + 1..], value.clone(), &path)?;
                     changes.push(ChangeContent::Insert { path, value });
                     Ok(())
                 }
@@ -89,7 +90,7 @@ impl ChangeTree {
                     change: ChangeContent::Insert { path, value },
                 }),
                 ChangeTree::Add { new, changes } => {
-                    new.apply_insert(&path[index + 1..], value.clone(), &path)?;
+                    apply_insert(new, &path[index + 1..], value.clone(), &path)?;
                     changes.push(ChangeContent::Insert { path, value });
                     Ok(())
                 }
@@ -158,7 +159,7 @@ impl ChangeTree {
         if let Some(elem) = path.get(index) {
             match self {
                 ChangeTree::Replace { old, new, changes } => {
-                    new.apply_replace(&path[index + 1..], old_val.clone(), new_val.clone(), &path)?;
+                    apply_replace(new,&path[index + 1..], &old_val, new_val.clone(), &path)?;
                     changes.push(ChangeContent::Replace {
                         path,
                         old: old_val,
@@ -174,7 +175,7 @@ impl ChangeTree {
                     },
                 }),
                 ChangeTree::Add { new, changes } => {
-                    new.apply_replace(&path[index + 1..], old_val.clone(), new_val.clone(), &path)?;
+                    apply_replace(new,&path[index + 1..], &old_val, new_val.clone(), &path)?;
                     changes.push(ChangeContent::Replace {
                         path,
                         old: old_val,
