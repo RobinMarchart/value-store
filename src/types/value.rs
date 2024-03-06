@@ -202,7 +202,7 @@ impl<'de> Visitor<'de> for ValueVisitor {
         .to_string();
         v.copy_within(str_len + 1.., 0);
         v.truncate(v.len() - str_len - 1);
-        Ok(Value::Blob (Blob{ mime, data: v }.into()))
+        Ok(Value::Blob(Blob { mime, data: v }.into()))
     }
 }
 
@@ -262,7 +262,7 @@ impl Value {
             Some(self)
         }
     }
-    pub fn apply_iter<'l,I: IntoIterator<Item = &'l C>, C: ApplyChange+'l>(
+    pub fn apply_iter<'l, I: IntoIterator<Item = &'l C>, C: ApplyChange + 'l>(
         &'l mut self,
         i: I,
     ) -> Result<(), ValueStoreError> {
@@ -297,12 +297,189 @@ impl PartialEq for Value {
             (Value::String(v1), Value::String(v2)) => v1 == v2,
             (Value::Array(v1), Value::Array(v2)) => v1 == v2,
             (Value::Map(v1), Value::Map(v2)) => v1 == v2,
-            (
-                Value::Blob(v1),Value::Blob(v2)
-            ) => v1.mime == v2.mime && v1.data == v2.data,
+            (Value::Blob(v1), Value::Blob(v2)) => v1.mime == v2.mime && v1.data == v2.data,
             _ => false,
         }
     }
 }
 
 impl Eq for Value {}
+
+#[cfg(test)]
+mod test {
+    use std::collections::HashMap;
+
+    use ciborium::{from_reader, into_writer};
+    use serde_test::{assert_de_tokens, assert_tokens, Token};
+
+    use super::{Blob, Value};
+
+    #[test]
+    fn value_eq_float() {
+        assert_eq!(Value::Float(0.0), Value::Float(-0.0));
+        assert_eq!(Value::Float(f64::NAN), Value::Float(f64::NAN));
+        let n1 = f64::from_bits(u64::MAX);
+        assert!(n1.is_nan());
+        let n2 = f64::from_bits(u64::MAX - 1);
+        assert!(n2.is_nan());
+        assert_eq!(Value::Float(n1), Value::Float(n2))
+    }
+
+    #[test]
+    fn value_int_ser_de() {
+        assert_tokens(&Value::Integer(4), &[Token::I64(4)]);
+        assert_de_tokens(&Value::Integer(4), &[Token::U64(4)]);
+    }
+
+    #[test]
+    fn value_float_ser_de() {
+        assert_tokens(&Value::Float(3.14), &[Token::F64(3.14)]);
+    }
+
+    #[test]
+    fn value_bool_ser_de() {
+        assert_tokens(&Value::Bool(false), &[Token::Bool(false)]);
+    }
+
+    #[test]
+    fn value_str_ser_de() {
+        assert_tokens(
+            &Value::String("test".to_string().into()),
+            &[Token::Str("test")],
+        );
+        assert_de_tokens(
+            &Value::String("t".to_string().into()),
+            &[Token::String("t")],
+        );
+        assert_de_tokens(
+            &Value::String("t".to_string().into()),
+            &[Token::BorrowedStr("t")],
+        );
+    }
+
+    #[test]
+    fn value_arr_ser_de() {
+        assert_tokens(
+            &Value::Array(vec![].into()),
+            &[Token::Seq { len: Some(0) }, Token::SeqEnd],
+        );
+        assert_de_tokens(
+            &Value::Array(vec![].into()),
+            &[Token::Seq { len: None }, Token::SeqEnd],
+        );
+        assert_tokens(
+            &Value::Array(vec![Value::Bool(true)].into()),
+            &[
+                Token::Seq { len: Some(1) },
+                Token::Bool(true),
+                Token::SeqEnd,
+            ],
+        );
+        assert_de_tokens(
+            &Value::Array(vec![Value::Bool(true)].into()),
+            &[Token::Seq { len: None }, Token::Bool(true), Token::SeqEnd],
+        );
+    }
+
+    #[test]
+    fn value_map_ser_de() {
+        assert_tokens(
+            &Value::Map(HashMap::from_iter([]).into()),
+            &[Token::Map { len: Some(0) }, Token::MapEnd],
+        );
+        assert_de_tokens(
+            &Value::Map(HashMap::from_iter([]).into()),
+            &[Token::Map { len: None }, Token::MapEnd],
+        );
+        assert_tokens(
+            &Value::Map(HashMap::from_iter([("test".to_string(), Value::Integer(5))]).into()),
+            &[
+                Token::Map { len: Some(1) },
+                Token::Str("test"),
+                Token::I64(5),
+                Token::MapEnd,
+            ],
+        );
+        assert_de_tokens(
+            &Value::Map(HashMap::from_iter([("test".to_string(), Value::Integer(5))]).into()),
+            &[
+                Token::Map { len: None },
+                Token::Str("test"),
+                Token::I64(5),
+                Token::MapEnd,
+            ],
+        );
+    }
+
+    #[test]
+    fn value_blob_ser_de() {
+        assert_tokens(
+            &Value::Blob(
+                Blob {
+                    mime: "abcd".to_string(),
+                    data: b"efgh".to_vec(),
+                }
+                .into(),
+            ),
+            &[Token::Bytes(b"\x04abcdefgh")],
+        );
+        assert_de_tokens(
+            &Value::Blob(
+                Blob {
+                    mime: "abcd".to_string(),
+                    data: b"efgh".to_vec(),
+                }
+                .into(),
+            ),
+            &[Token::ByteBuf(b"\x04abcdefgh")],
+        );
+        assert_de_tokens(
+            &Value::Blob(
+                Blob {
+                    mime: "abcd".to_string(),
+                    data: b"efgh".to_vec(),
+                }
+                .into(),
+            ),
+            &[Token::BorrowedBytes(b"\x04abcdefgh")],
+        );
+    }
+
+    #[test]
+    fn value_cbor_ser_de() {
+        let val = Value::Map(
+            HashMap::from_iter([
+                ("int".to_string(), Value::Integer(4)),
+                ("float".to_string(), Value::Float(0.125)),
+                ("bool".to_string(), Value::Bool(false)),
+                (
+                    "str".to_string(),
+                    Value::String("string".to_string().into()),
+                ),
+                (
+                    "arr".to_string(),
+                    Value::Array(vec![Value::Integer(1)].into()),
+                ),
+                (
+                    "blob".to_string(),
+                    Value::Blob(
+                        Blob {
+                            mime: "test".to_string(),
+                            data: b"hello there".to_vec(),
+                        }
+                        .into(),
+                    ),
+                ),
+            ])
+            .into(),
+        );
+        let mut serialized = Vec::new();
+        into_writer(&val, &mut serialized).expect("serializing failed");
+        let res: Value = from_reader(serialized.as_slice()).expect("de-serializing failed");
+        assert_eq!(
+            val,
+            res,
+            "value differs after round trip"
+        )
+    }
+}
